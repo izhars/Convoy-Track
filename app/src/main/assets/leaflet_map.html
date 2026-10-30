@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Convoy Live Map</title>
+    <!-- Use local bundled Leaflet assets for instant offline loading and zero CORS issues -->
+    <link rel="stylesheet" href="leaflet.css" />
+    <script src="leaflet.js"></script>
+    <style>
+        html, body, #map {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            background-color: #0F172A;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            overflow: hidden;
+        }
+        .vehicle-marker-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            pointer-events: auto;
+            transform-origin: center center;
+        }
+        .vehicle-tag {
+            background: rgba(15, 23, 42, 0.92);
+            color: #FFFFFF;
+            font-size: 11px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 12px;
+            white-space: nowrap;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.25);
+            margin-bottom: 2px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .vehicle-tag .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .status-moving { background-color: #10B981; box-shadow: 0 0 6px #10B981; }
+        .status-stopped { background-color: #F59E0B; }
+        .status-offline { background-color: #94A3B8; }
+        .vehicle-icon-wrapper {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.45);
+            transition: transform 0.4s ease-out;
+            border: 2px solid #FFFFFF;
+        }
+        .vehicle-icon-svg {
+            width: 22px;
+            height: 22px;
+            fill: #FFFFFF;
+        }
+        .pulse-ring {
+            position: absolute;
+            width: 46px;
+            height: 46px;
+            border-radius: 50%;
+            border: 2px solid;
+            opacity: 0.8;
+            animation: pulse-ring-anim 2s infinite ease-out;
+            pointer-events: none;
+        }
+        @keyframes pulse-ring-anim {
+            0% { transform: scale(0.8); opacity: 0.8; }
+            100% { transform: scale(1.6); opacity: 0; }
+        }
+        .dest-marker {
+            background: #EF4444;
+            color: white;
+            border-radius: 50%;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 14px;
+            border: 2px solid white;
+            box-shadow: 0 4px 12px rgba(239,68,68,0.6);
+        }
+        .origin-marker {
+            background: #00D2FF;
+            color: #0F172A;
+            border-radius: 50%;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 14px;
+            border: 2px solid white;
+            box-shadow: 0 4px 12px rgba(0,210,255,0.6);
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <script>
+        var map;
+        var vehicleMarkers = {};
+        var routePolyline = null;
+        var alternativePolylines = [];
+        var destMarker = null;
+        var originMarker = null;
+        var travelledPaths = {};
+
+        function initMap() {
+            try {
+                if (typeof L === 'undefined') {
+                    console.error("Leaflet library not loaded!");
+                    return;
+                }
+
+                map = L.map('map', {
+                    zoomControl: false,
+                    attributionControl: false
+                }).setView([20.5937, 78.9629], 5);
+
+                // Use reliable OpenStreetMap tiles
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    maxZoom: 19,
+                    subdomains: ['a', 'b', 'c']
+                }).addTo(map);
+
+                map.on('click', function(e) {
+                    if (window.AndroidBridge && window.AndroidBridge.onMapClicked) {
+                        window.AndroidBridge.onMapClicked(e.latlng.lat, e.latlng.lng);
+                    }
+                });
+
+                // Crucial for Android WebView container size measurement:
+                // invalidateSize forces Leaflet to recalculate its dimensions after layout
+                setTimeout(function() { if (map) map.invalidateSize(); }, 150);
+                setTimeout(function() { if (map) map.invalidateSize(); }, 500);
+                setTimeout(function() { if (map) map.invalidateSize(); }, 1200);
+
+                window.addEventListener('resize', function() {
+                    if (map) map.invalidateSize();
+                });
+
+                if (window.AndroidBridge && window.AndroidBridge.onMapReady) {
+                    window.AndroidBridge.onMapReady();
+                }
+            } catch (err) {
+                console.error("Map initialization failed: ", err);
+            }
+        }
+
+        // Decode Polyline helper
+        function decodePolyline(str, precision) {
+            var index = 0, lat = 0, lng = 0, coordinates = [];
+            var shift = 0, result = 0, byte = null, latitude_change, longitude_change, factor = Math.pow(10, precision || 5);
+
+            while (index < str.length) {
+                byte = null; shift = 0; result = 0;
+                do {
+                    byte = str.charCodeAt(index++) - 63;
+                    result |= (byte & 0x1f) << shift;
+                    shift += 5;
+                } while (byte >= 0x20);
+                latitude_change = ((result & 1) ? ~(result >> 1) : (result >> 1));
+
+                shift = 0; result = 0;
+                do {
+                    byte = str.charCodeAt(index++) - 63;
+                    result |= (byte & 0x1f) << shift;
+                    shift += 5;
+                } while (byte >= 0x20);
+                longitude_change = ((result & 1) ? ~(result >> 1) : (result >> 1));
+
+                lat += latitude_change;
+                lng += longitude_change;
+                coordinates.push([lat / factor, lng / factor]);
+            }
+            return coordinates;
+        }
+
+        function setTripRoute(polylineStr, altPolylineStrList) {
+            if (!map) return;
+            if (routePolyline) {
+                map.removeLayer(routePolyline);
+                routePolyline = null;
+            }
+            alternativePolylines.forEach(function(p) { map.removeLayer(p); });
+            alternativePolylines = [];
+
+            if (polylineStr && polylineStr.length > 0) {
+                try {
+                    var coords = decodePolyline(polylineStr, 5);
+                    if (coords.length > 0) {
+                        routePolyline = L.polyline(coords, {
+                            color: '#00D2FF',
+                            weight: 6,
+                            opacity: 0.95,
+                            lineCap: 'round',
+                            lineJoin: 'round'
+                        }).addTo(map);
+                    }
+                } catch(e) {
+                    console.error("Polyline decode failed", e);
+                }
+            }
+
+            if (altPolylineStrList) {
+                try {
+                    var alts = JSON.parse(altPolylineStrList);
+                    alts.forEach(function(altStr) {
+                        var altCoords = decodePolyline(altStr, 5);
+                        var altLine = L.polyline(altCoords, {
+                            color: '#94A3B8',
+                            weight: 4,
+                            opacity: 0.6,
+                            dashArray: '8, 8'
+                        }).addTo(map);
+                        alternativePolylines.push(altLine);
+                    });
+                } catch(e) {}
+            }
+            map.invalidateSize();
+        }
+
+        function setTripEndpoints(originLat, originLng, originName, destLat, destLng, destName) {
+            if (!map) return;
+            if (originMarker) { map.removeLayer(originMarker); originMarker = null; }
+            if (destMarker) { map.removeLayer(destMarker); destMarker = null; }
+
+            var bounds = [];
+            if (originLat && originLng && (originLat !== 0 || originLng !== 0)) {
+                var oIcon = L.divIcon({
+                    className: 'custom-div-icon',
+                    html: '<div class="origin-marker" title="' + (originName || 'Origin') + '">A</div>',
+                    iconSize: [32, 32],
+                    iconAnchor: [16, 16]
+                });
+                originMarker = L.marker([originLat, originLng], { icon: oIcon }).addTo(map);
+                bounds.push([originLat, originLng]);
+            }
+
+            if (destLat && destLng && (destLat !== 0 || destLng !== 0)) {
+                var dIcon = L.divIcon({
+                    className: 'custom-div-icon',
+                    html: '<div class="dest-marker" title="' + (destName || 'Destination') + '">B</div>',
+                    iconSize: [32, 32],
+                    iconAnchor: [16, 16]
+                });
+                destMarker = L.marker([destLat, destLng], { icon: dIcon }).addTo(map);
+                bounds.push([destLat, destLng]);
+            }
+
+            map.invalidateSize();
+            if (bounds.length === 2) {
+                map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
+            } else if (bounds.length === 1) {
+                map.setView(bounds[0], 12);
+            }
+        }
+
+        function updateVehicles(vehiclesJson) {
+            if (!map) return;
+            var vehicles = JSON.parse(vehiclesJson);
+            var currentIds = {};
+
+            vehicles.forEach(function(v) {
+                currentIds[v.vehicleId] = true;
+                var lat = v.latitude;
+                var lng = v.longitude;
+                var heading = v.heading || 0;
+                var color = v.vehicleColor || '#00D2FF';
+                var statusClass = 'status-' + (v.status || 'moving');
+
+                var carSvg = '<svg class="vehicle-icon-svg" viewBox="0 0 24 24"><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/></svg>';
+
+                var html = '<div class="vehicle-marker-container">' +
+                    '<div class="vehicle-tag">' +
+                        '<span class="status-dot ' + statusClass + '"></span>' +
+                        '<span>' + (v.driverName || 'Driver') + '</span>' +
+                        '<span style="opacity:0.75; font-size:10px;">' + Math.round(v.speedKmh || 0) + ' km/h</span>' +
+                    '</div>' +
+                    (v.status === 'moving' ? '<div class="pulse-ring" style="border-color:' + color + '"></div>' : '') +
+                    '<div class="vehicle-icon-wrapper" style="background-color:' + color + '; transform: rotate(' + heading + 'deg);">' +
+                        carSvg +
+                    '</div>' +
+                '</div>';
+
+                var icon = L.divIcon({
+                    className: 'custom-vehicle-div',
+                    html: html,
+                    iconSize: [120, 64],
+                    iconAnchor: [60, 48]
+                });
+
+                if (vehicleMarkers[v.vehicleId]) {
+                    vehicleMarkers[v.vehicleId].setLatLng([lat, lng]);
+                    vehicleMarkers[v.vehicleId].setIcon(icon);
+                } else {
+                    var marker = L.marker([lat, lng], { icon: icon }).addTo(map);
+                    marker.on('click', function() {
+                        if (window.AndroidBridge && window.AndroidBridge.onVehicleClicked) {
+                            window.AndroidBridge.onVehicleClicked(v.vehicleId);
+                        }
+                    });
+                    vehicleMarkers[v.vehicleId] = marker;
+                }
+
+                if (!travelledPaths[v.vehicleId]) {
+                    travelledPaths[v.vehicleId] = L.polyline([[lat, lng]], {
+                        color: color,
+                        weight: 3,
+                        opacity: 0.5,
+                        dashArray: '4, 4'
+                    }).addTo(map);
+                } else {
+                    travelledPaths[v.vehicleId].addLatLng([lat, lng]);
+                }
+            });
+
+            for (var id in vehicleMarkers) {
+                if (!currentIds[id]) {
+                    map.removeLayer(vehicleMarkers[id]);
+                    delete vehicleMarkers[id];
+                    if (travelledPaths[id]) {
+                        map.removeLayer(travelledPaths[id]);
+                        delete travelledPaths[id];
+                    }
+                }
+            }
+        }
+
+        function fitAll() {
+            if (!map) return;
+            map.invalidateSize();
+            var bounds = L.latLngBounds([]);
+            var hasPoints = false;
+
+            for (var id in vehicleMarkers) {
+                bounds.extend(vehicleMarkers[id].getLatLng());
+                hasPoints = true;
+            }
+            if (routePolyline) {
+                bounds.extend(routePolyline.getBounds());
+                hasPoints = true;
+            }
+            if (originMarker) {
+                bounds.extend(originMarker.getLatLng());
+                hasPoints = true;
+            }
+            if (destMarker) {
+                bounds.extend(destMarker.getLatLng());
+                hasPoints = true;
+            }
+            if (hasPoints) {
+                map.fitBounds(bounds, { padding: [50, 50], maxZoom: 16 });
+            }
+        }
+
+        function recenterTo(lat, lng, zoom) {
+            if (!map) return;
+            map.invalidateSize();
+            map.setView([lat, lng], zoom || 15);
+        }
+
+        window.onload = initMap;
+    </script>
+</body>
+</html>

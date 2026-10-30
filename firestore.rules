@@ -1,0 +1,162 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_-]+$');
+    }
+
+    // --- Validation Blueprints ---
+
+    function isValidUserProfile(data) {
+      return data.userId is string && data.userId == request.auth.uid &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 100 &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 100)) &&
+             (!('vehicleName' in data) || (data.vehicleName is string && data.vehicleName.size() <= 100)) &&
+             (!('vehicleColor' in data) || (data.vehicleColor is string && data.vehicleColor.size() <= 32)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidTrip(data) {
+      return data.tripId is string && data.tripId.size() >= 1 && data.tripId.size() <= 64 &&
+             data.title is string && data.title.size() >= 1 && data.title.size() <= 200 &&
+             data.destinationName is string && data.destinationName.size() >= 1 && data.destinationName.size() <= 1000 &&
+             data.destinationLat is number &&
+             data.destinationLng is number &&
+             (!('originName' in data) || (data.originName is string && data.originName.size() <= 1000)) &&
+             (!('originLat' in data) || data.originLat is number) &&
+             (!('originLng' in data) || data.originLng is number) &&
+             data.creatorId is string && data.creatorId.size() >= 1 &&
+             data.joinCode is string && data.joinCode.size() >= 4 && data.joinCode.size() <= 12 &&
+             data.status in ['active', 'completed', 'cancelled'] &&
+             (!('selectedRoutePolyline' in data) || (data.selectedRoutePolyline is string && data.selectedRoutePolyline.size() <= 250000)) &&
+             (!('routeDistanceKm' in data) || data.routeDistanceKm is number) &&
+             (!('routeDurationMinutes' in data) || data.routeDurationMinutes is number) &&
+             data.participantIds is list && data.participantIds.size() >= 1 && data.participantIds.size() <= 50 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidVehicleLocation(data) {
+      return data.vehicleId is string && data.vehicleId == request.auth.uid &&
+             data.tripId is string && data.tripId.size() >= 1 && data.tripId.size() <= 64 &&
+             data.driverName is string && data.driverName.size() >= 1 && data.driverName.size() <= 100 &&
+             (!('vehicleName' in data) || (data.vehicleName is string && data.vehicleName.size() <= 100)) &&
+             (!('vehicleColor' in data) || (data.vehicleColor is string && data.vehicleColor.size() <= 32)) &&
+             data.latitude is number &&
+             data.longitude is number &&
+             data.speedKmh is number &&
+             data.heading is number &&
+             (!('batteryPercent' in data) || (data.batteryPercent is number && data.batteryPercent >= 0 && data.batteryPercent <= 100)) &&
+             data.status in ['moving', 'stopped', 'offline'] &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    // --- Users Collection ---
+    match /users/{userId} {
+      allow get, list: if isSignedIn() && request.auth.uid == userId;
+
+      allow create: if isSignedIn() &&
+                       request.auth.uid == userId &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll(['userId', 'displayName', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['userId', 'displayName', 'email', 'vehicleName', 'vehicleColor', 'createdAt', 'updatedAt']) &&
+                       isValidUserProfile(incoming());
+
+      allow update: if isSignedIn() &&
+                       request.auth.uid == userId &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'vehicleName', 'vehicleColor', 'updatedAt']) &&
+                       isValidUserProfile(incoming());
+
+      allow delete: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    // --- Trips Collection ---
+    match /trips/{tripId} {
+      allow get: if isSignedIn() &&
+                    (resource.data.status == 'active' ||
+                     resource.data.creatorId == request.auth.uid ||
+                     request.auth.uid in resource.data.participantIds);
+
+      allow list: if isSignedIn() &&
+                     (request.auth.uid in resource.data.participantIds || resource.data.status == 'active');
+
+      allow create: if isSignedIn() &&
+                       isValidId(tripId) &&
+                       incoming().tripId == tripId &&
+                       incoming().creatorId == request.auth.uid &&
+                       (request.auth.uid in incoming().participantIds) &&
+                       incoming().keys().hasAll(['tripId', 'title', 'destinationName', 'destinationLat', 'destinationLng', 'creatorId', 'joinCode', 'status', 'participantIds', 'createdAt', 'updatedAt']) &&
+                       incoming().keys().hasOnly(['tripId', 'title', 'destinationName', 'destinationLat', 'destinationLng', 'originName', 'originLat', 'originLng', 'creatorId', 'joinCode', 'status', 'selectedRoutePolyline', 'routeDistanceKm', 'routeDurationMinutes', 'participantIds', 'createdAt', 'updatedAt']) &&
+                       isValidTrip(incoming());
+
+      allow update: if isSignedIn() &&
+                       isValidId(tripId) &&
+                       incoming().tripId == existing().tripId &&
+                       incoming().creatorId == existing().creatorId &&
+                       incoming().createdAt == existing().createdAt &&
+                       isValidTrip(incoming()) &&
+                       (
+                         // Action 1: Creator updating trip status or route details
+                         (existing().creatorId == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'status', 'selectedRoutePolyline', 'routeDistanceKm', 'routeDurationMinutes', 'participantIds', 'updatedAt'])) ||
+                         // Action 2: Participant joining or leaving active trip
+                         (existing().status == 'active' &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['participantIds', 'updatedAt']))
+                       );
+
+      allow delete: if isSignedIn() && existing().creatorId == request.auth.uid;
+
+      // --- Vehicle Locations Subcollection ---
+      match /vehicles/{vehicleId} {
+        allow get, list: if isSignedIn() &&
+                            (vehicleId == request.auth.uid ||
+                             request.auth.uid == get(/databases/$(database)/documents/trips/$(tripId)).data.creatorId ||
+                             (request.auth.uid in get(/databases/$(database)/documents/trips/$(tripId)).data.participantIds));
+
+        allow create: if isSignedIn() &&
+                         vehicleId == request.auth.uid &&
+                         incoming().vehicleId == request.auth.uid &&
+                         incoming().tripId == tripId &&
+                         (request.auth.uid == get(/databases/$(database)/documents/trips/$(tripId)).data.creatorId ||
+                          (request.auth.uid in get(/databases/$(database)/documents/trips/$(tripId)).data.participantIds)) &&
+                         incoming().keys().hasAll(['vehicleId', 'tripId', 'driverName', 'latitude', 'longitude', 'speedKmh', 'heading', 'status', 'updatedAt']) &&
+                         incoming().keys().hasOnly(['vehicleId', 'tripId', 'driverName', 'vehicleName', 'vehicleColor', 'latitude', 'longitude', 'speedKmh', 'heading', 'batteryPercent', 'status', 'updatedAt']) &&
+                         isValidVehicleLocation(incoming());
+
+        allow update: if isSignedIn() &&
+                         vehicleId == request.auth.uid &&
+                         incoming().vehicleId == existing().vehicleId &&
+                         incoming().tripId == existing().tripId &&
+                         (request.auth.uid == get(/databases/$(database)/documents/trips/$(tripId)).data.creatorId ||
+                          (request.auth.uid in get(/databases/$(database)/documents/trips/$(tripId)).data.participantIds)) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['driverName', 'vehicleName', 'vehicleColor', 'latitude', 'longitude', 'speedKmh', 'heading', 'batteryPercent', 'status', 'updatedAt']) &&
+                         isValidVehicleLocation(incoming());
+
+        allow delete: if isSignedIn() &&
+                         (vehicleId == request.auth.uid ||
+                          get(/databases/$(database)/documents/trips/$(tripId)).data.creatorId == request.auth.uid);
+      }
+    }
+  }
+}

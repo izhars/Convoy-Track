@@ -1,0 +1,6 @@
+{
+  "name": "Convoy Track",
+  "description": "Smart group live vehicle tracking and navigation app for road trips and convoys with real-time multi-vehicle GPS tracking and route planning.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

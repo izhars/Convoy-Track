@@ -1,0 +1,193 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with display name and vehicle defaults",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Unique user ID matching authenticated user UID"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User's display or driver name"
+        },
+        "email": {
+          "type": "string",
+          "description": "User's email address"
+        },
+        "vehicleName": {
+          "type": "string",
+          "description": "Default vehicle name or model (e.g., White Fortuner)"
+        },
+        "vehicleColor": {
+          "type": "string",
+          "description": "Default vehicle color hex code (e.g., #2196F3)"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp via FieldValue.serverTimestamp()"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last updated timestamp via FieldValue.serverTimestamp()"
+        }
+      },
+      "required": ["userId", "displayName", "createdAt", "updatedAt"]
+    },
+    "Trip": {
+      "title": "Trip",
+      "description": "Group travel trip details, origin, destination, route and participant IDs",
+      "type": "object",
+      "properties": {
+        "tripId": {
+          "type": "string",
+          "description": "Unique trip ID"
+        },
+        "title": {
+          "type": "string",
+          "description": "Trip title / name"
+        },
+        "destinationName": {
+          "type": "string",
+          "description": "Destination address or place name"
+        },
+        "destinationLat": {
+          "type": "number",
+          "description": "Destination latitude"
+        },
+        "destinationLng": {
+          "type": "number",
+          "description": "Destination longitude"
+        },
+        "originName": {
+          "type": "string",
+          "description": "Origin address or start point"
+        },
+        "originLat": {
+          "type": "number",
+          "description": "Origin latitude"
+        },
+        "originLng": {
+          "type": "number",
+          "description": "Origin longitude"
+        },
+        "creatorId": {
+          "type": "string",
+          "description": "User UID who created the trip"
+        },
+        "joinCode": {
+          "type": "string",
+          "description": "6-character join code for invite"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "completed", "cancelled"],
+          "description": "Trip status"
+        },
+        "selectedRoutePolyline": {
+          "type": "string",
+          "description": "Encoded polyline representing the chosen route"
+        },
+        "routeDistanceKm": {
+          "type": "number",
+          "description": "Total route distance in kilometers"
+        },
+        "routeDurationMinutes": {
+          "type": "number",
+          "description": "Estimated duration in minutes"
+        },
+        "participantIds": {
+          "type": "array",
+          "description": "List of user UIDs currently participating in this trip"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Trip creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Trip last updated timestamp"
+        }
+      },
+      "required": ["tripId", "title", "destinationName", "destinationLat", "destinationLng", "creatorId", "joinCode", "status", "participantIds", "createdAt", "updatedAt"]
+    },
+    "VehicleLocation": {
+      "title": "VehicleLocation",
+      "description": "Live GPS location, telemetry and status of a participating vehicle",
+      "type": "object",
+      "properties": {
+        "vehicleId": {
+          "type": "string",
+          "description": "Unique vehicle/driver ID (matches participant user UID)"
+        },
+        "tripId": {
+          "type": "string",
+          "description": "Trip ID this vehicle belongs to"
+        },
+        "driverName": {
+          "type": "string",
+          "description": "Driver name"
+        },
+        "vehicleName": {
+          "type": "string",
+          "description": "Vehicle description/model"
+        },
+        "vehicleColor": {
+          "type": "string",
+          "description": "Vehicle marker color hex"
+        },
+        "latitude": {
+          "type": "number",
+          "description": "Current GPS latitude"
+        },
+        "longitude": {
+          "type": "number",
+          "description": "Current GPS longitude"
+        },
+        "speedKmh": {
+          "type": "number",
+          "description": "Speed in km/h"
+        },
+        "heading": {
+          "type": "number",
+          "description": "Compass heading in degrees (0-360)"
+        },
+        "batteryPercent": {
+          "type": "number",
+          "description": "Device battery percentage (0-100)"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["moving", "stopped", "offline"],
+          "description": "Tracking status"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp of this location telemetry"
+        }
+      },
+      "required": ["vehicleId", "tripId", "driverName", "latitude", "longitude", "speedKmh", "heading", "status", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile with display name and preferences"
+    },
+    "/trips/{tripId}": {
+      "schema": "Trip",
+      "description": "Group trip details and participants"
+    },
+    "/trips/{tripId}/vehicles/{vehicleId}": {
+      "schema": "VehicleLocation",
+      "description": "Live vehicle location and telemetry in the trip"
+    }
+  }
+}
