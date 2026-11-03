@@ -9,11 +9,14 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.model.PlaceSearchResult
 import com.example.data.model.RouteAlternative
 import com.example.data.model.Trip
+import com.example.data.model.TripSummary
 import com.example.data.model.UserProfile
 import com.example.data.model.VehicleLocation
 import com.example.data.repository.RoutingRepository
 import com.example.data.repository.TripRepository
 import com.example.data.repository.UserRepository
+import com.example.data.util.EtaCalculator
+import com.example.data.util.RealTimeEta
 import com.example.service.TrackingForegroundService
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseUser
@@ -25,6 +28,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -73,6 +77,43 @@ class ConvoyViewModel(application: Application) : AndroidViewModel(application) 
     val isTrackingServiceRunning: StateFlow<Boolean> = TrackingForegroundService.isServiceRunning
     val currentSpeedKmh: StateFlow<Double> = TrackingForegroundService.currentSpeedKmh
 
+    private val _completedTripSummary = MutableStateFlow<TripSummary?>(null)
+    val completedTripSummary = _completedTripSummary.asStateFlow()
+
+    // Real-Time ETA calculator flow: recalculates live as user moves or GPS updates
+    val realTimeEta: StateFlow<RealTimeEta> = combine(
+        TrackingForegroundService.currentLocation,
+        TrackingForegroundService.currentSpeedKmh,
+        _activeTrip,
+        _tripVehicles
+    ) { loc, speed, trip, vehicles ->
+        if (trip == null) {
+            RealTimeEta(0.0, 0, "--:--", 0f, 0.0, 0.0, false)
+        } else {
+            val myUid = _currentUser.value?.uid
+            val myVehicle = vehicles.firstOrNull { it.vehicleId == myUid }
+            val curLat = loc?.latitude ?: myVehicle?.latitude ?: trip.originLat
+            val curLng = loc?.longitude ?: myVehicle?.longitude ?: trip.originLng
+            val curSpeed = if (speed > 0) speed else (myVehicle?.speedKmh ?: 0.0)
+
+            EtaCalculator.calculateEta(
+                currentLat = curLat,
+                currentLng = curLng,
+                destLat = trip.destinationLat,
+                destLng = trip.destinationLng,
+                originLat = trip.originLat,
+                originLng = trip.originLng,
+                routeTotalDistanceKm = trip.routeDistanceKm,
+                routeExpectedDurationMinutes = trip.routeDurationMinutes,
+                currentSpeedKmh = curSpeed
+            )
+        }
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        RealTimeEta(0.0, 0, "--:--", 0f, 0.0, 0.0, false)
+    )
+
     private var activeTripJob: Job? = null
     private var vehiclesJob: Job? = null
 
@@ -108,15 +149,29 @@ class ConvoyViewModel(application: Application) : AndroidViewModel(application) 
                 .catch { /* handled in repo */ }
                 .collect { trips ->
                     _userTrips.value = trips
-                    if (_activeTrip.value == null && trips.isNotEmpty()) {
-                        val active = trips.firstOrNull { it.status == "active" } ?: trips.first()
-                        selectTrip(active)
+                    if (_activeTrip.value == null) {
+                        val active = trips.firstOrNull { it.status == "active" }
+                        if (active != null) {
+                            selectTrip(active)
+                        }
+                    } else if (_activeTrip.value?.status != "active") {
+                        clearActiveTrip()
                     }
                 }
         }
     }
 
     fun selectTrip(trip: Trip) {
+        if (trip.status != "active") {
+            _activeTrip.value = trip
+            activeTripJob?.cancel()
+            activeTripJob = null
+            vehiclesJob?.cancel()
+            vehiclesJob = null
+            _tripVehicles.value = emptyList()
+            return
+        }
+
         _activeTrip.value = trip
         activeTripJob?.cancel()
         vehiclesJob?.cancel()
@@ -125,7 +180,9 @@ class ConvoyViewModel(application: Application) : AndroidViewModel(application) 
             tripRepository.observeTrip(trip.tripId)
                 .catch { /* handled */ }
                 .collect { updated ->
-                    if (updated != null) {
+                    if (updated == null || updated.status != "active") {
+                        clearActiveTrip()
+                    } else {
                         _activeTrip.value = updated
                     }
                 }
@@ -138,6 +195,15 @@ class ConvoyViewModel(application: Application) : AndroidViewModel(application) 
                     _tripVehicles.value = vehicles
                 }
         }
+    }
+
+    fun clearActiveTrip() {
+        activeTripJob?.cancel()
+        activeTripJob = null
+        vehiclesJob?.cancel()
+        vehiclesJob = null
+        _activeTrip.value = null
+        _tripVehicles.value = emptyList()
     }
 
     private var searchJob: Job? = null
@@ -281,23 +347,160 @@ class ConvoyViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun leaveCurrentTrip(context: Context) {
-        val tripId = _activeTrip.value?.tripId ?: return
+        val trip = _activeTrip.value ?: return
+        val stats = TrackingForegroundService.tripStats.value
+
+        // Calculate summary metrics
+        val durationSec = if (stats.elapsedSeconds > 10) {
+            stats.elapsedSeconds
+        } else {
+            (trip.routeDurationMinutes * 60).toLong().coerceAtLeast(60L)
+        }
+        val distanceKm = if (stats.distanceKm > 0.05) {
+            stats.distanceKm
+        } else {
+            trip.routeDistanceKm
+        }
+        val avgSpeed = if (stats.avgSpeedKmh > 1.0) {
+            stats.avgSpeedKmh
+        } else if (durationSec > 0) {
+            distanceKm / (durationSec / 3600.0)
+        } else {
+            0.0
+        }
+        val maxSpeed = if (stats.maxSpeedKmh > 1.0) stats.maxSpeedKmh else (avgSpeed * 1.25)
+
+        val summary = TripSummary(
+            tripId = trip.tripId,
+            tripTitle = trip.title,
+            originName = trip.originName,
+            destinationName = trip.destinationName,
+            totalDistanceKm = distanceKm,
+            totalDurationSeconds = durationSec,
+            averageSpeedKmh = avgSpeed,
+            maxSpeedKmh = maxSpeed,
+            participantCount = _tripVehicles.value.size.coerceAtLeast(1),
+            endedAtMillis = System.currentTimeMillis(),
+            polyline = trip.selectedRoutePolyline,
+            isCompletedByCreator = (trip.creatorId == _currentUser.value?.uid)
+        )
+
         stopTracking(context)
+        clearActiveTrip()
+        _completedTripSummary.value = summary
+
         viewModelScope.launch {
-            tripRepository.leaveTrip(tripId)
-            _activeTrip.value = null
-            _tripVehicles.value = emptyList()
-            _uiMessage.value = "Left trip"
+            val result = tripRepository.leaveTrip(
+                tripId = trip.tripId,
+                finalDistanceKm = distanceKm,
+                finalDurationSeconds = durationSec,
+                finalAverageSpeedKmh = avgSpeed,
+                finalMaxSpeedKmh = maxSpeed
+            )
+            result.onSuccess {
+                _uiMessage.value = "Left convoy successfully"
+            }.onFailure { e ->
+                _uiMessage.value = "Failed to leave convoy: ${e.message}"
+            }
         }
     }
 
     fun completeCurrentTrip(context: Context) {
-        val tripId = _activeTrip.value?.tripId ?: return
-        stopTracking(context)
-        viewModelScope.launch {
-            tripRepository.completeTrip(tripId)
-            _uiMessage.value = "Trip marked as completed!"
+        val trip = _activeTrip.value ?: return
+        val stats = TrackingForegroundService.tripStats.value
+
+        val durationSec = if (stats.elapsedSeconds > 10) {
+            stats.elapsedSeconds
+        } else {
+            (trip.routeDurationMinutes * 60).toLong().coerceAtLeast(60L)
         }
+        val distanceKm = if (stats.distanceKm > 0.05) {
+            stats.distanceKm
+        } else {
+            trip.routeDistanceKm
+        }
+        val avgSpeed = if (stats.avgSpeedKmh > 1.0) {
+            stats.avgSpeedKmh
+        } else if (durationSec > 0) {
+            distanceKm / (durationSec / 3600.0)
+        } else {
+            0.0
+        }
+        val maxSpeed = if (stats.maxSpeedKmh > 1.0) stats.maxSpeedKmh else (avgSpeed * 1.25)
+
+        val summary = TripSummary(
+            tripId = trip.tripId,
+            tripTitle = trip.title,
+            originName = trip.originName,
+            destinationName = trip.destinationName,
+            totalDistanceKm = distanceKm,
+            totalDurationSeconds = durationSec,
+            averageSpeedKmh = avgSpeed,
+            maxSpeedKmh = maxSpeed,
+            participantCount = _tripVehicles.value.size.coerceAtLeast(1),
+            endedAtMillis = System.currentTimeMillis(),
+            polyline = trip.selectedRoutePolyline,
+            isCompletedByCreator = true
+        )
+
+        stopTracking(context)
+        clearActiveTrip()
+        _completedTripSummary.value = summary
+
+        viewModelScope.launch {
+            val result = tripRepository.completeTrip(
+                tripId = trip.tripId,
+                finalDistanceKm = distanceKm,
+                finalDurationSeconds = durationSec,
+                finalAverageSpeedKmh = avgSpeed,
+                finalMaxSpeedKmh = maxSpeed
+            )
+            result.onSuccess {
+                _uiMessage.value = "Trip ended successfully!"
+            }.onFailure { e ->
+                _uiMessage.value = "Failed to end trip: ${e.message}"
+            }
+        }
+    }
+
+    fun dismissTripSummary() {
+        _completedTripSummary.value = null
+    }
+
+    fun showTripSummary(summary: TripSummary) {
+        _completedTripSummary.value = summary
+    }
+
+    fun openSummaryForPastTrip(trip: Trip) {
+        val durationSec = if (trip.finalDurationSeconds > 0) {
+            trip.finalDurationSeconds
+        } else {
+            (trip.routeDurationMinutes * 60).toLong().coerceAtLeast(60L)
+        }
+        val distanceKm = if (trip.finalDistanceKm > 0) trip.finalDistanceKm else trip.routeDistanceKm
+        val avgSpeed = if (trip.finalAverageSpeedKmh > 0) {
+            trip.finalAverageSpeedKmh
+        } else if (durationSec > 0) {
+            distanceKm / (durationSec / 3600.0)
+        } else {
+            0.0
+        }
+        val maxSpeed = if (trip.finalMaxSpeedKmh > 0) trip.finalMaxSpeedKmh else (avgSpeed * 1.25)
+
+        _completedTripSummary.value = TripSummary(
+            tripId = trip.tripId,
+            tripTitle = trip.title,
+            originName = trip.originName,
+            destinationName = trip.destinationName,
+            totalDistanceKm = distanceKm,
+            totalDurationSeconds = durationSec,
+            averageSpeedKmh = avgSpeed,
+            maxSpeedKmh = maxSpeed,
+            participantCount = trip.participantCount.coerceAtLeast(1),
+            endedAtMillis = trip.createdAtMillis,
+            polyline = trip.selectedRoutePolyline,
+            isCompletedByCreator = true
+        )
     }
 
     fun saveProfile(displayName: String, vehicleName: String, vehicleColor: String) {

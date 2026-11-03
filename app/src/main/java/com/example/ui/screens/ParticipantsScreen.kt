@@ -20,9 +20,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.BatteryFull
 import androidx.compose.material.icons.filled.DirectionsCar
-import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.NearMe
 import androidx.compose.material.icons.filled.Share
@@ -64,6 +64,14 @@ fun ParticipantsScreen(
     val activeTrip by viewModel.activeTrip.collectAsState()
     val vehicles by viewModel.tripVehicles.collectAsState()
     val currentUser by viewModel.currentUser.collectAsState()
+    val completedTripSummary by viewModel.completedTripSummary.collectAsState()
+
+    completedTripSummary?.let { summary ->
+        TripSummaryDashboard(
+            summary = summary,
+            onDismiss = { viewModel.dismissTripSummary() }
+        )
+    }
 
     Column(
         modifier = modifier
@@ -154,7 +162,7 @@ fun ParticipantsScreen(
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B))
                 ) {
-                    Icon(imageVector = Icons.Default.ExitToApp, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(imageVector = Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(text = "Leave Convoy", fontSize = 13.sp)
                 }

@@ -54,6 +54,10 @@ fun LeafletMapView(
     vehicles: List<VehicleLocation>,
     currentTrip: Trip?,
     selectedAlternativePolyline: String? = null,
+    isPickerMode: Boolean = false,
+    pickerPinLat: Double? = null,
+    pickerPinLng: Double? = null,
+    pickerShouldRecenter: Boolean = false,
     onMapClick: (Double, Double) -> Unit = { _, _ -> },
     onVehicleClick: (String) -> Unit = {},
     modifier: Modifier = Modifier
@@ -125,23 +129,47 @@ fun LeafletMapView(
         webView.evaluateJavascript(js, null)
     }
 
-    // Sync trip endpoints and route
-    LaunchedEffect(currentTrip, selectedAlternativePolyline, isMapLoaded) {
+    // Sync picker mode state to Leaflet map
+    LaunchedEffect(isPickerMode, isMapLoaded) {
         if (!isMapLoaded) return@LaunchedEffect
+        webView.evaluateJavascript("if (typeof setPickerMode === 'function') { setPickerMode($isPickerMode); }", null)
+    }
+
+    // Sync pin marker in picker mode (only recenters if pickerShouldRecenter is true, e.g. from search selection)
+    LaunchedEffect(pickerPinLat, pickerPinLng, pickerShouldRecenter, isMapLoaded, isPickerMode) {
+        if (!isMapLoaded || !isPickerMode) return@LaunchedEffect
+        if (pickerPinLat != null && pickerPinLng != null && (pickerPinLat != 0.0 || pickerPinLng != 0.0)) {
+            val pinJs = "if (typeof setPinMarker === 'function') { setPinMarker($pickerPinLat, $pickerPinLng, '', $pickerShouldRecenter); }"
+            webView.evaluateJavascript(pinJs, null)
+        }
+    }
+
+    // Sync trip endpoints and route (disabled in picker mode to prevent resetting zoom or reloading tiles on tap)
+    LaunchedEffect(currentTrip, selectedAlternativePolyline, isMapLoaded, isPickerMode) {
+        if (!isMapLoaded || isPickerMode) return@LaunchedEffect
         if (currentTrip != null) {
             val polyline = selectedAlternativePolyline?.ifBlank { currentTrip.selectedRoutePolyline }
                 ?: currentTrip.selectedRoutePolyline
 
+            val quotedOrigin = JSONObject.quote(currentTrip.originName)
+            val quotedDest = JSONObject.quote(currentTrip.destinationName)
             val endpointsJs = "if (typeof setTripEndpoints === 'function') { setTripEndpoints(" +
-                    "${currentTrip.originLat}, ${currentTrip.originLng}, '${currentTrip.originName.replace("'", "\\'")}', " +
-                    "${currentTrip.destinationLat}, ${currentTrip.destinationLng}, '${currentTrip.destinationName.replace("'", "\\'")}'); }"
+                    "${currentTrip.originLat}, ${currentTrip.originLng}, $quotedOrigin, " +
+                    "${currentTrip.destinationLat}, ${currentTrip.destinationLng}, $quotedDest); }"
             webView.evaluateJavascript(endpointsJs, null)
 
-            val routeJs = "if (typeof setTripRoute === 'function') { setTripRoute('$polyline', null); }"
+            // Safely quote polyline using JSONObject.quote to escape backslashes and unicode chars in long routes
+            val quotedPolyline = JSONObject.quote(polyline ?: "")
+            val routeJs = "if (typeof setTripRoute === 'function') { setTripRoute($quotedPolyline, null); }"
             webView.evaluateJavascript(routeJs, null)
 
             val fitJs = "if (typeof fitAll === 'function') { fitAll(); }"
             webView.evaluateJavascript(fitJs, null)
+        } else {
+            val clearJs = "if (typeof clearTrip === 'function') { clearTrip(); } else { " +
+                    "if (typeof setTripEndpoints === 'function') { setTripEndpoints(null, null, '', null, null, ''); } " +
+                    "if (typeof setTripRoute === 'function') { setTripRoute('', null); } }"
+            webView.evaluateJavascript(clearJs, null)
         }
     }
 

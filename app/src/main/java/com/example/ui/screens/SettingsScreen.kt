@@ -19,9 +19,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.BatterySaver
 import androidx.compose.material.icons.filled.DirectionsCar
-import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Save
@@ -267,7 +267,7 @@ fun SettingsScreen(
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
             modifier = Modifier.fillMaxWidth().height(48.dp).testTag("sign_out_button")
         ) {
-            Icon(imageVector = Icons.Default.ExitToApp, contentDescription = null, tint = ConvoyDangerRed, modifier = Modifier.size(18.dp))
+            Icon(imageVector = Icons.AutoMirrored.Filled.ExitToApp, contentDescription = null, tint = ConvoyDangerRed, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(8.dp))
             Text(text = "Sign Out (${currentUser?.email ?: ""})", color = ConvoyDangerRed, fontWeight = FontWeight.SemiBold)
         }

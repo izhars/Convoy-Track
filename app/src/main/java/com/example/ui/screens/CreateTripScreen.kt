@@ -556,6 +556,7 @@ fun LocationPickerModal(
     var selectedName by remember { mutableStateOf(initialName.ifBlank { if (isOrigin) "Selected Origin" else "Selected Destination" }) }
     var selectedLat by remember { mutableDoubleStateOf(initialLat) }
     var selectedLng by remember { mutableDoubleStateOf(initialLng) }
+    var shouldRecenter by remember { mutableStateOf(true) }
     var isReverseGeocoding by remember { mutableStateOf(false) }
 
     val placeResults by viewModel.placeSearchResults.collectAsState()
@@ -570,19 +571,17 @@ fun LocationPickerModal(
                 .fillMaxSize()
                 .background(ConvoyNavyDark)
         ) {
-            // Full screen Map View
-            val dummyTrip = remember(selectedLat, selectedLng, isOrigin) {
-                if (isOrigin) {
-                    Trip(originLat = selectedLat, originLng = selectedLng, originName = selectedName)
-                } else {
-                    Trip(destinationLat = selectedLat, destinationLng = selectedLng, destinationName = selectedName)
-                }
-            }
-
+            // Full screen Map View with seamless Pin Dropping without zooming out
             LeafletMapView(
                 vehicles = emptyList(),
-                currentTrip = dummyTrip,
+                currentTrip = null,
+                isPickerMode = true,
+                pickerPinLat = selectedLat,
+                pickerPinLng = selectedLng,
+                pickerShouldRecenter = shouldRecenter,
                 onMapClick = { clickedLat, clickedLng ->
+                    // Directly place pin on tap without recentering or zooming out
+                    shouldRecenter = false
                     selectedLat = clickedLat
                     selectedLng = clickedLng
                     isReverseGeocoding = true
@@ -725,6 +724,7 @@ fun LocationPickerModal(
                                                             selectedLat = loc.latitude
                                                             selectedLng = loc.longitude
                                                             selectedName = "Current GPS Location"
+                                                            shouldRecenter = true
                                                         }
                                                     } catch (e: Exception) {}
                                                 } else {
@@ -762,6 +762,7 @@ fun LocationPickerModal(
                                                 selectedLat = loc.latitude
                                                 selectedLng = loc.longitude
                                                 selectedName = "Current GPS Location"
+                                                shouldRecenter = true
                                             }
                                         } catch (e: Exception) {}
                                     }
@@ -800,6 +801,7 @@ fun LocationPickerModal(
                                             selectedName = place.primaryText
                                             selectedLat = place.latitude
                                             selectedLng = place.longitude
+                                            shouldRecenter = true
                                             searchQuery = place.primaryText
                                             viewModel.searchPlaces("")
                                         }

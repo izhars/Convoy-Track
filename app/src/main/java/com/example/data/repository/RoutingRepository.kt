@@ -16,8 +16,9 @@ import java.util.concurrent.TimeUnit
 class RoutingRepository {
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(25, TimeUnit.SECONDS)
+        .readTimeout(25, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
 
     private val olaApiKey: String
@@ -371,54 +372,67 @@ class RoutingRepository {
         destLat: Double,
         destLng: Double
     ): List<RouteAlternative> {
-        return try {
-            val url = "https://router.project-osrm.org/route/v1/driving/$originLng,$originLat;$destLng,$destLat?overview=full&geometries=polyline&alternatives=true"
-            val request = Request.Builder()
-                .url(url)
-                .header("User-Agent", "ConvoyTrackApp/1.0 (Android)")
-                .build()
-            val response = client.newCall(request).execute()
-            val body = response.body?.string() ?: return emptyList()
+        val servers = listOf(
+            "https://router.project-osrm.org",
+            "https://routing.openstreetmap.de/routed-car"
+        )
 
-            val json = JSONObject(body)
-            val routes = json.optJSONArray("routes") ?: return emptyList()
-            val list = mutableListOf<RouteAlternative>()
+        for (server in servers) {
+            try {
+                val url = "$server/route/v1/driving/$originLng,$originLat;$destLng,$destLat?overview=full&geometries=polyline&alternatives=true"
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "ConvoyTrackApp/1.0 (Android; dev@convoy.app)")
+                    .build()
+                val response = client.newCall(request).execute()
+                val body = response.body?.string()
+                if (!response.isSuccessful || body.isNullOrBlank()) continue
 
-            for (i in 0 until routes.length()) {
-                val route = routes.getJSONObject(i)
-                val distanceMeters = route.optDouble("distance", 0.0)
-                val durationSeconds = route.optDouble("duration", 0.0)
-                val geometry = route.optString("geometry", "")
+                val json = JSONObject(body)
+                val routes = json.optJSONArray("routes")
+                if (routes == null || routes.length() == 0) continue
 
-                val summary = if (i == 0) "Fastest Route" else "Alternative Route $i"
+                val list = mutableListOf<RouteAlternative>()
+                for (i in 0 until routes.length()) {
+                    val route = routes.getJSONObject(i)
+                    val distanceMeters = route.optDouble("distance", 0.0)
+                    val durationSeconds = route.optDouble("duration", 0.0)
+                    val geometry = route.optString("geometry", "")
 
-                list.add(
-                    RouteAlternative(
-                        routeIndex = i,
-                        summary = summary,
-                        distanceKm = Math.round((distanceMeters / 1000.0) * 10.0) / 10.0,
-                        durationMinutes = Math.round(durationSeconds / 60.0).toDouble(),
-                        polyline = geometry,
-                        isRecommended = i == 0
+                    if (geometry.isBlank()) continue
+
+                    val summary = if (i == 0) "Fastest Highway Route" else "Alternative Route $i"
+
+                    list.add(
+                        RouteAlternative(
+                            routeIndex = i,
+                            summary = summary,
+                            distanceKm = Math.round((distanceMeters / 1000.0) * 10.0) / 10.0,
+                            durationMinutes = Math.round(durationSeconds / 60.0).toDouble(),
+                            polyline = geometry,
+                            isRecommended = i == 0
+                        )
                     )
-                )
+                }
+                if (list.isNotEmpty()) return list
+            } catch (e: Exception) {
+                Log.w("RoutingRepo", "Routing attempt on $server failed: ${e.message}")
             }
-            list
-        } catch (e: Exception) {
-            Log.w("RoutingRepo", "OSRM routing failed: ${e.message}")
-            // Fallback straight-line polyline if network fails
-            val distanceKm = calculateHaversineDistance(originLat, originLng, destLat, destLng)
-            listOf(
-                RouteAlternative(
-                    routeIndex = 0,
-                    summary = "Direct Route",
-                    distanceKm = Math.round(distanceKm * 10.0) / 10.0,
-                    durationMinutes = Math.round((distanceKm / 50.0) * 60.0).toDouble(),
-                    polyline = encodeSimpleLine(originLat, originLng, destLat, destLng),
-                    isRecommended = true
-                )
-            )
         }
+
+        // Direct geodesic interpolated polyline between origin and destination in India
+        val distanceKm = calculateHaversineDistance(originLat, originLng, destLat, destLng)
+        val interpolated = generateInterpolatedPolyline(originLat, originLng, destLat, destLng)
+        return listOf(
+            RouteAlternative(
+                routeIndex = 0,
+                summary = "Direct Route (${String.format("%.1f", distanceKm)} km)",
+                distanceKm = Math.round(distanceKm * 10.0) / 10.0,
+                durationMinutes = Math.round((distanceKm / 65.0) * 60.0).toDouble(),
+                polyline = interpolated,
+                isRecommended = true
+            )
+        )
     }
 
     private fun calculateHaversineDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
@@ -432,7 +446,45 @@ class RoutingRepository {
         return r * c
     }
 
-    private fun encodeSimpleLine(lat1: Double, lon1: Double, lat2: Double, lon2: Double): String {
-        return "_p~iF~ps|U_ulLnnqC"
+    private fun generateInterpolatedPolyline(lat1: Double, lon1: Double, lat2: Double, lon2: Double): String {
+        val points = mutableListOf<Pair<Double, Double>>()
+        val steps = 30
+        for (i in 0..steps) {
+            val fraction = i.toDouble() / steps
+            val lat = lat1 + (lat2 - lat1) * fraction
+            val lon = lon1 + (lon2 - lon1) * fraction
+            points.add(Pair(lat, lon))
+        }
+        return encodePolyline(points)
+    }
+
+    private fun encodePolyline(points: List<Pair<Double, Double>>): String {
+        val result = StringBuilder()
+        var lastLat = 0
+        var lastLng = 0
+
+        for (point in points) {
+            val lat = Math.round(point.first * 1e5).toInt()
+            val lng = Math.round(point.second * 1e5).toInt()
+
+            val dLat = lat - lastLat
+            val dLng = lng - lastLng
+
+            encodeValue(dLat, result)
+            encodeValue(dLng, result)
+
+            lastLat = lat
+            lastLng = lng
+        }
+        return result.toString()
+    }
+
+    private fun encodeValue(value: Int, result: StringBuilder) {
+        var v = if (value < 0) (value.inv() shl 1) or 1 else value shl 1
+        while (v >= 0x20) {
+            result.append(((v and 0x1f) or 0x20 + 63).toChar())
+            v = v shr 5
+        }
+        result.append((v + 63).toChar())
     }
 }

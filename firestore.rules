@@ -50,7 +50,7 @@ service cloud.firestore {
              (!('selectedRoutePolyline' in data) || (data.selectedRoutePolyline is string && data.selectedRoutePolyline.size() <= 250000)) &&
              (!('routeDistanceKm' in data) || data.routeDistanceKm is number) &&
              (!('routeDurationMinutes' in data) || data.routeDurationMinutes is number) &&
-             data.participantIds is list && data.participantIds.size() >= 1 && data.participantIds.size() <= 50 &&
+             data.participantIds is list && data.participantIds.size() >= 0 && data.participantIds.size() <= 50 &&
              data.createdAt is timestamp && data.createdAt <= request.time &&
              data.updatedAt is timestamp && data.updatedAt <= request.time;
     }

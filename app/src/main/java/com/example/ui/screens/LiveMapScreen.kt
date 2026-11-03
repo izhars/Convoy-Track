@@ -25,16 +25,21 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.BatteryFull
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.LocationSearching
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -42,6 +47,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -63,6 +69,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.Trip
 import com.example.data.model.VehicleLocation
+import com.example.data.util.EtaCalculator
+import com.example.data.util.RealTimeEta
 import com.example.ui.ConvoyViewModel
 import com.example.ui.components.LeafletMapView
 import com.example.ui.theme.ConvoyAccentGreen
@@ -72,6 +80,7 @@ import com.example.ui.theme.ConvoyPrimaryBlue
 import com.example.ui.theme.ConvoyPrimaryCyan
 import com.example.ui.theme.ConvoySurfaceDark
 import com.example.ui.theme.ConvoyWarningAmber
+import java.util.Locale
 
 @Composable
 fun LiveMapScreen(
@@ -86,8 +95,18 @@ fun LiveMapScreen(
     val isTrackingActive by viewModel.isTrackingServiceRunning.collectAsState()
     val currentSpeed by viewModel.currentSpeedKmh.collectAsState()
     val currentUser by viewModel.currentUser.collectAsState()
+    val realTimeEta by viewModel.realTimeEta.collectAsState()
+    val completedTripSummary by viewModel.completedTripSummary.collectAsState()
 
     var selectedVehicleId by remember { mutableStateOf<String?>(null) }
+
+    // Trip Summary Dashboard modal overlay when trip ends
+    completedTripSummary?.let { summary ->
+        TripSummaryDashboard(
+            summary = summary,
+            onDismiss = { viewModel.dismissTripSummary() }
+        )
+    }
 
     Box(modifier = modifier.fillMaxSize()) {
         if (activeTrip == null) {
@@ -105,11 +124,21 @@ fun LiveMapScreen(
                 modifier = Modifier.fillMaxSize()
             )
 
-            // Top Floating Trip Header
+            // Top Floating Trip Header & Real-time ETA Navigation HUD
+            val isCreator = activeTrip!!.creatorId == currentUser?.uid
             TopTripHeader(
                 trip = activeTrip!!,
+                realTimeEta = realTimeEta,
                 vehicleCount = tripVehicles.size,
                 context = context,
+                isCreator = isCreator,
+                onEndOrLeaveTrip = {
+                    if (isCreator) {
+                        viewModel.completeCurrentTrip(context)
+                    } else {
+                        viewModel.leaveCurrentTrip(context)
+                    }
+                },
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(top = 48.dp, start = 16.dp, end = 16.dp)
@@ -140,20 +169,25 @@ fun LiveMapScreen(
 @Composable
 private fun TopTripHeader(
     trip: Trip,
+    realTimeEta: RealTimeEta,
     vehicleCount: Int,
     context: Context,
+    isCreator: Boolean,
+    onEndOrLeaveTrip: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Card(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
-            containerColor = Color(0xDD0F172A)
+            containerColor = Color(0xEE0F172A)
         ),
         modifier = modifier
             .fillMaxWidth()
-            .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(18.dp))
+            .border(1.dp, Color(0x33FFFFFF), RoundedCornerShape(20.dp))
+            .testTag("top_trip_header")
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
+            // Title & Actions Row
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -177,57 +211,174 @@ private fun TopTripHeader(
                     )
                 }
 
-                // Join Code Pill with Copy Action
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color(0xFF1E293B))
-                        .clickable {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText("Convoy Join Code", trip.joinCode))
-                            Toast.makeText(context, "Code ${trip.joinCode} copied!", Toast.LENGTH_SHORT).show()
-                        }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text(
-                        text = trip.joinCode,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 13.sp,
-                        color = ConvoyPrimaryCyan
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Icon(
-                        imageVector = Icons.Default.ContentCopy,
-                        contentDescription = "Copy code",
-                        tint = ConvoyPrimaryCyan,
-                        modifier = Modifier.size(14.dp)
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Join Code Pill with Copy Action
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFF1E293B))
+                            .clickable {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                clipboard.setPrimaryClip(ClipData.newPlainText("Convoy Join Code", trip.joinCode))
+                                Toast.makeText(context, "Code ${trip.joinCode} copied!", Toast.LENGTH_SHORT).show()
+                            }
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                            .testTag("join_code_pill")
+                    ) {
+                        Text(
+                            text = trip.joinCode,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 13.sp,
+                            color = ConvoyPrimaryCyan
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = "Copy code",
+                            tint = ConvoyPrimaryCyan,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(8.dp))
+
+                    // End / Leave Action Button
+                    IconButton(
+                        onClick = onEndOrLeaveTrip,
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(if (isCreator) ConvoyDangerRed.copy(alpha = 0.2f) else Color(0xFF1E293B))
+                            .border(
+                                1.dp,
+                                if (isCreator) ConvoyDangerRed.copy(alpha = 0.6f) else Color(0x33FFFFFF),
+                                CircleShape
+                            )
+                            .testTag(if (isCreator) "end_trip_button" else "leave_trip_button")
+                    ) {
+                        Icon(
+                            imageVector = if (isCreator) Icons.Default.Close else Icons.AutoMirrored.Filled.ExitToApp,
+                            contentDescription = if (isCreator) "End Trip" else "Leave Convoy",
+                            tint = if (isCreator) ConvoyDangerRed else Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // Trip stats chips row
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            // Real-Time ETA Navigation HUD Banner
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFF1A263D)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("real_time_eta_banner")
             ) {
-                StatChip(
-                    label = "$vehicleCount ${if (vehicleCount == 1) "Car" else "Cars"} Moving",
-                    color = ConvoyAccentGreen
-                )
-                if (trip.routeDistanceKm > 0) {
-                    StatChip(
-                        label = "${trip.routeDistanceKm} km",
-                        color = ConvoyPrimaryBlue
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Left: ETA Clock & Countdown
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clip(CircleShape)
+                                    .background(ConvoyPrimaryCyan.copy(alpha = 0.2f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Timer,
+                                    contentDescription = "ETA",
+                                    tint = ConvoyPrimaryCyan,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = "${realTimeEta.remainingMinutes} min",
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 16.sp,
+                                        color = Color.White
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "ETA ${realTimeEta.etaArrivalTimeString}",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = ConvoyPrimaryCyan
+                                    )
+                                }
+                                Text(
+                                    text = if (realTimeEta.isNearDestination) "Arriving at destination!"
+                                    else "${String.format(Locale.US, "%.1f", realTimeEta.remainingDistanceKm)} km remaining",
+                                    fontSize = 11.sp,
+                                    color = if (realTimeEta.isNearDestination) ConvoyAccentGreen else Color(0xFF94A3B8)
+                                )
+                            }
+                        }
+
+                        // Right: Fleet moving indicator
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(ConvoyAccentGreen.copy(alpha = 0.15f))
+                                .border(1.dp, ConvoyAccentGreen.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "$vehicleCount ${if (vehicleCount == 1) "Car" else "Cars"} Live",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = ConvoyAccentGreen
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Route Progress Bar
+                    val progress = realTimeEta.routeCompletionPercent.coerceIn(0f, 1f)
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(5.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = ConvoyPrimaryCyan,
+                        trackColor = Color(0xFF2B3A54),
                     )
-                }
-                if (trip.routeDurationMinutes > 0) {
-                    StatChip(
-                        label = "${trip.routeDurationMinutes.toInt()} min ETA",
-                        color = ConvoyWarningAmber
-                    )
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "${(progress * 100).toInt()}% of route covered",
+                            fontSize = 10.sp,
+                            color = Color(0xFF94A3B8)
+                        )
+                        if (realTimeEta.currentSpeedKmh > 0) {
+                            Text(
+                                text = "Current speed: ${realTimeEta.currentSpeedKmh.toInt()} km/h",
+                                fontSize = 10.sp,
+                                color = ConvoyWarningAmber
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -274,7 +425,12 @@ private fun BottomConvoyHUD(
             ) {
                 items(vehicles) { vehicle ->
                     val isMe = vehicle.vehicleId == myUserId
-                    VehicleHUDCard(vehicle = vehicle, isMe = isMe)
+                    VehicleHUDCard(
+                        vehicle = vehicle,
+                        destLat = activeTrip.destinationLat,
+                        destLng = activeTrip.destinationLng,
+                        isMe = isMe
+                    )
                 }
             }
         }
@@ -371,6 +527,8 @@ private fun BottomConvoyHUD(
 @Composable
 private fun VehicleHUDCard(
     vehicle: VehicleLocation,
+    destLat: Double,
+    destLng: Double,
     isMe: Boolean
 ) {
     val vehicleColor = try {
@@ -379,18 +537,24 @@ private fun VehicleHUDCard(
         ConvoyPrimaryBlue
     }
 
+    // Vehicle distance to destination and estimated remaining time
+    val distKm = EtaCalculator.calculateDistanceKm(vehicle.latitude, vehicle.longitude, destLat, destLng)
+    val speed = if (vehicle.speedKmh > 5.0) vehicle.speedKmh else 45.0
+    val etaMin = ((distKm / speed) * 60.0).toInt().coerceAtLeast(1)
+
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = Color(0xDD1E293B)
         ),
         modifier = Modifier
-            .width(150.dp)
+            .width(155.dp)
             .border(
                 1.5.dp,
                 if (isMe) ConvoyPrimaryCyan else Color(0x22FFFFFF),
                 RoundedCornerShape(16.dp)
             )
+            .testTag("vehicle_card_${vehicle.vehicleId}")
     ) {
         Column(modifier = Modifier.padding(10.dp)) {
             Row(
@@ -438,6 +602,27 @@ private fun VehicleHUDCard(
                 overflow = TextOverflow.Ellipsis
             )
 
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Vehicle ETA and Distance to Dest
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Timer,
+                    contentDescription = null,
+                    tint = ConvoyPrimaryCyan,
+                    modifier = Modifier.size(11.dp)
+                )
+                Text(
+                    text = "${etaMin}m • ${String.format(Locale.US, "%.1f", distKm)}km",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = ConvoyPrimaryCyan
+                )
+            }
+
             Spacer(modifier = Modifier.height(6.dp))
 
             Row(
@@ -449,7 +634,7 @@ private fun VehicleHUDCard(
                     text = "${vehicle.speedKmh.toInt()} km/h",
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 12.sp,
-                    color = ConvoyPrimaryCyan
+                    color = Color.White
                 )
 
                 Row(verticalAlignment = Alignment.CenterVertically) {

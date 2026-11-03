@@ -18,13 +18,18 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Route
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -33,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -43,6 +49,7 @@ import com.example.ui.theme.ConvoyNavyDark
 import com.example.ui.theme.ConvoyPrimaryBlue
 import com.example.ui.theme.ConvoyPrimaryCyan
 import com.example.ui.theme.ConvoyWarningAmber
+import java.util.Locale
 
 @Composable
 fun TripHistoryScreen(
@@ -52,12 +59,22 @@ fun TripHistoryScreen(
 ) {
     val trips by viewModel.userTrips.collectAsState()
     val activeTrip by viewModel.activeTrip.collectAsState()
+    val completedTripSummary by viewModel.completedTripSummary.collectAsState()
+
+    // Show Trip Summary Dashboard when a trip summary is active
+    completedTripSummary?.let { summary ->
+        TripSummaryDashboard(
+            summary = summary,
+            onDismiss = { viewModel.dismissTripSummary() }
+        )
+    }
 
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(ConvoyNavyDark)
             .padding(20.dp)
+            .testTag("trip_history_screen")
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
@@ -75,7 +92,7 @@ fun TripHistoryScreen(
                     color = Color.White
                 )
                 Text(
-                    text = "Your convoy journeys & past destinations",
+                    text = "Your convoy journeys, routes & past summaries",
                     fontSize = 13.sp,
                     color = Color(0xFF94A3B8)
                 )
@@ -108,8 +125,15 @@ fun TripHistoryScreen(
                         trip = trip,
                         isCurrent = isCurrent,
                         onClick = {
-                            viewModel.selectTrip(trip)
-                            onTripSelected()
+                            if (trip.status == "completed") {
+                                viewModel.openSummaryForPastTrip(trip)
+                            } else {
+                                viewModel.selectTrip(trip)
+                                onTripSelected()
+                            }
+                        },
+                        onViewSummaryClick = {
+                            viewModel.openSummaryForPastTrip(trip)
                         }
                     )
                 }
@@ -122,7 +146,8 @@ fun TripHistoryScreen(
 private fun TripHistoryCard(
     trip: Trip,
     isCurrent: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onViewSummaryClick: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -137,78 +162,135 @@ private fun TripHistoryCard(
                 RoundedCornerShape(16.dp)
             )
             .clickable { onClick() }
+            .testTag("trip_card_${trip.tripId}")
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = trip.title,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                        color = Color.White
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    val statusColor = if (trip.status == "active") ConvoyAccentGreen else Color(0xFF94A3B8)
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(statusColor.copy(alpha = 0.2f))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = trip.status.uppercase(),
-                            color = statusColor,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold
+                            text = trip.title,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = Color.White
                         )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        val statusColor = if (trip.status == "active") ConvoyAccentGreen else Color(0xFF94A3B8)
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(statusColor.copy(alpha = 0.2f))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = trip.status.uppercase(),
+                                color = statusColor,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
-                }
 
-                Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
 
-                Text(
-                    text = "${trip.originName} ➔ ${trip.destinationName}",
-                    fontSize = 12.sp,
-                    color = Color(0xFF94A3B8)
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
                     Text(
-                        text = "Code: ${trip.joinCode}",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = ConvoyPrimaryCyan
-                    )
-                    if (trip.routeDistanceKm > 0) {
-                        Text(
-                            text = "${trip.routeDistanceKm} km",
-                            fontSize = 11.sp,
-                            color = Color(0xFF94A3B8)
-                        )
-                    }
-                    Text(
-                        text = "${trip.participantIds.size} Drivers",
-                        fontSize = 11.sp,
+                        text = "${trip.originName} ➔ ${trip.destinationName}",
+                        fontSize = 12.sp,
                         color = Color(0xFF94A3B8)
                     )
                 }
+
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = "Open",
+                    tint = Color(0xFF64748B),
+                    modifier = Modifier.size(20.dp)
+                )
             }
 
-            Icon(
-                imageVector = Icons.Default.ChevronRight,
-                contentDescription = "Open",
-                tint = Color(0xFF64748B),
-                modifier = Modifier.size(20.dp)
-            )
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Metrics row: distance, time, avg speed if available
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                val distanceDisplay = if (trip.finalDistanceKm > 0) {
+                    String.format(Locale.US, "%.1f km", trip.finalDistanceKm)
+                } else if (trip.routeDistanceKm > 0) {
+                    "${trip.routeDistanceKm} km"
+                } else null
+
+                distanceDisplay?.let {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Route,
+                            contentDescription = null,
+                            tint = ConvoyPrimaryCyan,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = it,
+                            fontSize = 11.sp,
+                            color = Color(0xFFCBD5E1)
+                        )
+                    }
+                }
+
+                if (trip.finalAverageSpeedKmh > 0) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Speed,
+                            contentDescription = null,
+                            tint = ConvoyWarningAmber,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "${trip.finalAverageSpeedKmh.toInt()} km/h",
+                            fontSize = 11.sp,
+                            color = Color(0xFFCBD5E1)
+                        )
+                    }
+                }
+
+                Text(
+                    text = "${trip.participantIds.size} Drivers",
+                    fontSize = 11.sp,
+                    color = Color(0xFF94A3B8)
+                )
+            }
+
+            // Summary button for completed trips
+            if (trip.status == "completed") {
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onViewSummaryClick,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ConvoyPrimaryCyan),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(38.dp)
+                        .testTag("btn_summary_${trip.tripId}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Assessment,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "View Trip Summary Dashboard",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
         }
     }
 }

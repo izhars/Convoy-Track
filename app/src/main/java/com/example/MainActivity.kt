@@ -59,6 +59,7 @@ import com.example.ui.theme.ConvoyPrimaryCyan
 import com.example.ui.theme.ConvoySurfaceDark
 import com.example.ui.theme.MyApplicationTheme
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.auth
 import kotlinx.coroutines.launch
@@ -68,6 +69,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        if (FirebaseApp.getApps(this).isEmpty()) {
+            FirebaseApp.initializeApp(this)
+        }
 
         setContent {
             MyApplicationTheme {

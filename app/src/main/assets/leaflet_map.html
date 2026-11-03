@@ -118,6 +118,8 @@
         var alternativePolylines = [];
         var destMarker = null;
         var originMarker = null;
+        var pinMarker = null;
+        var isPickerMode = false;
         var travelledPaths = {};
 
         function initMap() {
@@ -139,6 +141,9 @@
                 }).addTo(map);
 
                 map.on('click', function(e) {
+                    if (isPickerMode) {
+                        setPinMarker(e.latlng.lat, e.latlng.lng, '', false);
+                    }
                     if (window.AndroidBridge && window.AndroidBridge.onMapClicked) {
                         window.AndroidBridge.onMapClicked(e.latlng.lat, e.latlng.lng);
                     }
@@ -191,6 +196,28 @@
             return coordinates;
         }
 
+        function setPickerMode(enabled) {
+            isPickerMode = !!enabled;
+        }
+
+        function setPinMarker(lat, lng, label, shouldCenter) {
+            if (!map || !lat || !lng || (lat === 0 && lng === 0)) return;
+            var pIcon = L.divIcon({
+                className: 'custom-div-icon',
+                html: '<div class="origin-marker" style="background:#00D2FF; width:34px; height:34px; font-size:16px; box-shadow:0 0 16px rgba(0,210,255,0.8); display:flex; align-items:center; justify-content:center; border:2px solid #fff;">📍</div>',
+                iconSize: [34, 34],
+                iconAnchor: [17, 34]
+            });
+            if (pinMarker) {
+                pinMarker.setLatLng([lat, lng]);
+            } else {
+                pinMarker = L.marker([lat, lng], { icon: pIcon }).addTo(map);
+            }
+            if (shouldCenter) {
+                map.setView([lat, lng], Math.max(map.getZoom(), 14));
+            }
+        }
+
         function setTripRoute(polylineStr, altPolylineStrList) {
             if (!map) return;
             if (routePolyline) {
@@ -205,6 +232,7 @@
                     var coords = decodePolyline(polylineStr, 5);
                     if (coords.length > 0) {
                         routePolyline = L.polyline(coords, {
+                            renderer: L.canvas(),
                             color: '#00D2FF',
                             weight: 6,
                             opacity: 0.95,
@@ -223,6 +251,7 @@
                     alts.forEach(function(altStr) {
                         var altCoords = decodePolyline(altStr, 5);
                         var altLine = L.polyline(altCoords, {
+                            renderer: L.canvas(),
                             color: '#94A3B8',
                             weight: 4,
                             opacity: 0.6,
@@ -231,6 +260,25 @@
                         alternativePolylines.push(altLine);
                     });
                 } catch(e) {}
+            }
+            map.invalidateSize();
+        }
+
+        function clearTrip() {
+            if (!map) return;
+            if (originMarker) { map.removeLayer(originMarker); originMarker = null; }
+            if (destMarker) { map.removeLayer(destMarker); destMarker = null; }
+            if (pinMarker) { map.removeLayer(pinMarker); pinMarker = null; }
+            if (routePolyline) { map.removeLayer(routePolyline); routePolyline = null; }
+            alternativePolylines.forEach(function(p) { map.removeLayer(p); });
+            alternativePolylines = [];
+            for (var id in vehicleMarkers) {
+                map.removeLayer(vehicleMarkers[id]);
+                delete vehicleMarkers[id];
+                if (travelledPaths[id]) {
+                    map.removeLayer(travelledPaths[id]);
+                    delete travelledPaths[id];
+                }
             }
             map.invalidateSize();
         }

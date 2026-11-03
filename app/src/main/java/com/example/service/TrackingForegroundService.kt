@@ -54,6 +54,13 @@ class TrackingForegroundService : Service() {
     private var vehicleColor: String = "#2563EB"
     private var isPaused: Boolean = false
 
+    data class LiveTripStats(
+        val distanceKm: Double = 0.0,
+        val elapsedSeconds: Long = 0L,
+        val avgSpeedKmh: Double = 0.0,
+        val maxSpeedKmh: Double = 0.0
+    )
+
     companion object {
         const val CHANNEL_ID = "convoy_live_tracking"
         const val NOTIFICATION_ID = 1001
@@ -76,6 +83,26 @@ class TrackingForegroundService : Service() {
 
         private val _currentSpeedKmh = MutableStateFlow(0.0)
         val currentSpeedKmh = _currentSpeedKmh.asStateFlow()
+
+        private val _tripStats = MutableStateFlow(LiveTripStats())
+        val tripStats = _tripStats.asStateFlow()
+
+        private var tripStartTimeMillis: Long = 0L
+        private var accumulatedDistanceMeters: Double = 0.0
+        private var lastLocation: Location? = null
+        private var maxRecordedSpeedKmh: Double = 0.0
+        private var movingSpeedSum: Double = 0.0
+        private var movingSpeedCount: Int = 0
+
+        fun resetTripStats() {
+            tripStartTimeMillis = System.currentTimeMillis()
+            accumulatedDistanceMeters = 0.0
+            lastLocation = null
+            maxRecordedSpeedKmh = 0.0
+            movingSpeedSum = 0.0
+            movingSpeedCount = 0
+            _tripStats.value = LiveTripStats()
+        }
     }
 
     override fun onCreate() {
@@ -99,6 +126,7 @@ class TrackingForegroundService : Service() {
                 vehicleName = intent.getStringExtra(EXTRA_VEHICLE_NAME) ?: "Vehicle"
                 vehicleColor = intent.getStringExtra(EXTRA_VEHICLE_COLOR) ?: "#2563EB"
                 isPaused = false
+                resetTripStats()
                 startTracking()
             }
             ACTION_PAUSE -> {
@@ -126,6 +154,41 @@ class TrackingForegroundService : Service() {
                 _currentLocation.value = location
                 val speedKmh = (location.speed * 3.6).toDouble()
                 _currentSpeedKmh.value = speedKmh
+
+                // Distance, duration, and speed accumulation
+                val prev = lastLocation
+                if (prev != null) {
+                    val delta = location.distanceTo(prev).toDouble()
+                    if (delta in 2.0..800.0) {
+                        accumulatedDistanceMeters += delta
+                    }
+                }
+                lastLocation = location
+
+                if (speedKmh > maxRecordedSpeedKmh) {
+                    maxRecordedSpeedKmh = speedKmh
+                }
+                if (speedKmh > 2.0) {
+                    movingSpeedSum += speedKmh
+                    movingSpeedCount++
+                }
+
+                val elapsed = if (tripStartTimeMillis > 0) (System.currentTimeMillis() - tripStartTimeMillis) / 1000L else 0L
+                val distKm = accumulatedDistanceMeters / 1000.0
+                val avgSpeed = if (elapsed > 5 && distKm > 0.02) {
+                    distKm / (elapsed / 3600.0)
+                } else if (movingSpeedCount > 0) {
+                    movingSpeedSum / movingSpeedCount
+                } else {
+                    speedKmh
+                }
+
+                _tripStats.value = LiveTripStats(
+                    distanceKm = Math.round(distKm * 10.0) / 10.0,
+                    elapsedSeconds = elapsed,
+                    avgSpeedKmh = Math.round(avgSpeed * 10.0) / 10.0,
+                    maxSpeedKmh = Math.round(maxRecordedSpeedKmh * 10.0) / 10.0
+                )
 
                 val batteryLevel = getBatteryLevel()
 

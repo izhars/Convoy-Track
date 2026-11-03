@@ -267,7 +267,13 @@ class TripRepository(private val db: FirebaseFirestore) {
         }
     }
 
-    suspend fun leaveTrip(tripId: String): Result<Unit> {
+    suspend fun leaveTrip(
+        tripId: String,
+        finalDistanceKm: Double = 0.0,
+        finalDurationSeconds: Long = 0L,
+        finalAverageSpeedKmh: Double = 0.0,
+        finalMaxSpeedKmh: Double = 0.0
+    ): Result<Unit> {
         val uid = requireUserId()
         return try {
             val tripRef = db.collection("trips").document(tripId)
@@ -275,21 +281,36 @@ class TripRepository(private val db: FirebaseFirestore) {
             val trip = snapshot.toObject(Trip::class.java)
 
             if (trip != null) {
+                // Delete user's vehicle location from subcollection first
+                try {
+                    tripRef.collection("vehicles").document(uid).delete().await()
+                } catch (ve: Exception) {
+                    android.util.Log.w("TripRepo", "Failed to delete vehicle on leave: ${ve.message}")
+                }
+
                 val updatedList = trip.participantIds.filter { it != uid }
-                tripRef.update(
+                val isCreator = trip.creatorId == uid
+
+                // If creator leaves or nobody left, mark completed
+                val updates = if (isCreator || updatedList.isEmpty()) {
+                    val map = mutableMapOf<String, Any>(
+                        "status" to "completed",
+                        "participantIds" to updatedList,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                    if (finalDistanceKm > 0) map["finalDistanceKm"] = finalDistanceKm
+                    if (finalDurationSeconds > 0) map["finalDurationSeconds"] = finalDurationSeconds
+                    if (finalAverageSpeedKmh > 0) map["finalAverageSpeedKmh"] = finalAverageSpeedKmh
+                    if (finalMaxSpeedKmh > 0) map["finalMaxSpeedKmh"] = finalMaxSpeedKmh
+                    map
+                } else {
                     mapOf(
                         "participantIds" to updatedList,
                         "updatedAt" to FieldValue.serverTimestamp()
                     )
-                ).await()
+                }
 
-                // Mark vehicle as offline
-                tripRef.collection("vehicles").document(uid).update(
-                    mapOf(
-                        "status" to "offline",
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                ).await()
+                tripRef.update(updates).await()
             }
             Result.success(Unit)
         } catch (e: Exception) {
@@ -298,14 +319,32 @@ class TripRepository(private val db: FirebaseFirestore) {
         }
     }
 
-    suspend fun completeTrip(tripId: String): Result<Unit> {
+    suspend fun completeTrip(
+        tripId: String,
+        finalDistanceKm: Double = 0.0,
+        finalDurationSeconds: Long = 0L,
+        finalAverageSpeedKmh: Double = 0.0,
+        finalMaxSpeedKmh: Double = 0.0
+    ): Result<Unit> {
+        val uid = requireUserId()
         return try {
-            db.collection("trips").document(tripId).update(
-                mapOf(
-                    "status" to "completed",
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-            ).await()
+            val tripRef = db.collection("trips").document(tripId)
+            try {
+                tripRef.collection("vehicles").document(uid).delete().await()
+            } catch (ve: Exception) {
+                android.util.Log.w("TripRepo", "Failed to delete vehicle on complete: ${ve.message}")
+            }
+
+            val updates = mutableMapOf<String, Any>(
+                "status" to "completed",
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            if (finalDistanceKm > 0) updates["finalDistanceKm"] = finalDistanceKm
+            if (finalDurationSeconds > 0) updates["finalDurationSeconds"] = finalDurationSeconds
+            if (finalAverageSpeedKmh > 0) updates["finalAverageSpeedKmh"] = finalAverageSpeedKmh
+            if (finalMaxSpeedKmh > 0) updates["finalMaxSpeedKmh"] = finalMaxSpeedKmh
+
+            tripRef.update(updates).await()
             Result.success(Unit)
         } catch (e: Exception) {
             handleFirestoreError(e, OperationType.UPDATE, "trips/$tripId/complete")

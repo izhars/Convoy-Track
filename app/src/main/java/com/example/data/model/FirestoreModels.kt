@@ -35,8 +35,31 @@ data class Trip(
     val routeDistanceKm: Double = 0.0,
     val routeDurationMinutes: Double = 0.0,
     val participantIds: List<String> = emptyList(),
+    val finalDistanceKm: Double = 0.0,
+    val finalDurationSeconds: Long = 0L,
+    val finalAverageSpeedKmh: Double = 0.0,
+    val finalMaxSpeedKmh: Double = 0.0,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
+) {
+    val participantCount: Int get() = participantIds.size
+    val createdAtMillis: Long get() = createdAt?.toDate()?.time ?: System.currentTimeMillis()
+}
+
+@IgnoreExtraProperties
+data class TripSummary(
+    val tripId: String = "",
+    val tripTitle: String = "",
+    val originName: String = "",
+    val destinationName: String = "",
+    val totalDistanceKm: Double = 0.0,
+    val totalDurationSeconds: Long = 0L,
+    val averageSpeedKmh: Double = 0.0,
+    val maxSpeedKmh: Double = 0.0,
+    val participantCount: Int = 1,
+    val endedAtMillis: Long = System.currentTimeMillis(),
+    val polyline: String = "",
+    val isCompletedByCreator: Boolean = false
 )
 
 @IgnoreExtraProperties
